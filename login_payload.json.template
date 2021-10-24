@@ -1,0 +1,15 @@
+{
+  "optType": 0,
+  "platformId": 0,
+  "userId": 0,
+  "socialId": "string",
+  "gigyaId": "string",
+  "fullName": "string",
+  "countryCode": "string",
+  "favTeamCode": "string",
+  "profilePic": "string",
+  "level": "string",
+  "levelName": "string",
+  "favTeamId": 0,
+  "accessToken": "string"
+}

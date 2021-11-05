@@ -10,12 +10,15 @@ from io import TextIOWrapper
 import json
 import requests
 from requests.models import Response
+import pandas as pd
+import pyomo.environ as pyo
 
 
 # API base URL
 API_URL = r'https://gaming.uefa.com/en/uclfantasy'
 
 
+# function to log into a session
 def session_login(payload_file: TextIOWrapper) -> Response:
     """POST request to login into a session"""
 
@@ -27,6 +30,7 @@ def session_login(payload_file: TextIOWrapper) -> Response:
     return req
 
 
+# function to log out of a session
 def session_logout() -> Response:
     """POST request to logout of the session"""
 
@@ -38,6 +42,7 @@ def session_logout() -> Response:
     return req
 
 
+# function to get players data/information
 def get_players_info(gameday_id: int) -> Response:
     """GET request to UCL Fantasy API to get players information"""
 
@@ -50,29 +55,115 @@ def get_players_info(gameday_id: int) -> Response:
     return req
 
 
-with open('login_payload.json', encoding='UTF8') as f:
+# function to select the best squad for a given matchday
+def select_matchday_squad(df_player_info: pd.DataFrame, matchday: int,
+    current_squad: list = None) -> list:
+    """MIP to select the best squad for a given matchday"""
 
-    # login to a session
-    res = session_login(f)
-    if res.status_code == 200:
-        print('Logged in!')
-        print(res.json())
-    else:
-        print('Error logging in!')
-        sys.exit()
+    # declare Pyomo model
+    model = pyo.ConcreteModel()
 
-    # query players data
-    print('Querying player info...')
-    res = get_players_info(4)
-    if res.status_code == 200:
-        print(f"Number of players: {len(res.json()['data']['value']['playerList'])}")
-    else:
-        print(f'Status code: {res.status_code}')
+    # set of players
+    model.sPlayers = pyo.Set(initialize=list(df_player_info['id']),
+        doc='Set of players')
 
-    # logout of the session
-    res = session_logout()
-    if res.status_code == 200:
-        print('Logged out!')
-    else:
-        print('Error logging out!')
-        sys.exit()
+    # set of player skills
+    model.sSkills = pyo.Set(initialize=[1, 2, 3, 4], doc='Set of player skills')
+
+    # set of clubs
+    model.sClubs = pyo.Set(initialize=list(df_player_info['cCode'].unique()))
+
+    # set of players in clubs
+    def sPlayersInClubs_init(m, club):
+        for player in list(df_player_info[df_player_info['cCode'] == club]['id']):
+            yield player
+    model.sPlayersInClubs = pyo.Set(model.sClubs, initialize=sPlayersInClubs_init)
+
+    # set of matchdays
+    num_matchdays = 13
+    model.sMatchdays = pyo.Set(initialize=[i+1 for i in range(0, num_matchdays)],
+        doc='Set of matchdays')
+
+    # set of stages
+    model.sStages = pyo.Set(initialize=['Group stage', 'Round of 16', 'Quarter-finals',
+        'Semi-finals', 'Final'], doc='Set of stages')
+
+    # set of matchdays in stages
+    matchdays_in_stages = {'Group stage': [i+1 for i in range(0, 6)],
+        'Round of 16': [7, 8], 'Quarter-finals': [9, 10], 'Semi-finals': [11, 12],
+        'Final': [13]}
+    def sMatchdaysInStages_init(m, stage):
+        for matchday in matchdays_in_stages[stage]:
+            yield matchday
+    model.sMatchdaysInStages = pyo.Set(model.sStages, initialize=sMatchdaysInStages_init)
+
+    # param: required number of players by skills in a squad
+    model.pReqdPlayersBySkills = pyo.Param(model.sSkills, initialize={1:2, 2:5, 3:5, 4:3},
+        doc="Required number of players by skills")
+
+    # param: limit players per club by stages in a squad
+    model.pLimPlayersPerClub = pyo.Param(model.sStages, initialize={'Group stage': 3,
+        'Round of 16': 4, 'Quarter-finals': 5, 'Semi-finals': 6, 'Final': 8},
+        doc='Limit on max number of players per club by stages')
+
+    # param: free transfer limit for matchdays
+    model.pLimFreeTransfers = pyo.Param(model.sMatchdays, initialize={1:15, 2:2, 3:2, 4:2,
+        5:2, 6:2, 7:15, 8:3, 9:5, 10:3, 11:5, 12:3, 13:5},
+        doc="Free transfers before matchdays")
+
+    #TODO: declare variables
+
+    #TODO: define constraints
+
+    #TODO: define objective
+
+    #TODO: solve MIP to get best squad
+
+    #TODO: return best squad
+
+    return []
+
+
+# main function
+def main():
+    """Main function"""
+
+    with open('login_payload.json', encoding='UTF8') as f_login_payload:
+
+        # login to a session
+        res = session_login(f_login_payload)
+        if res.status_code == 200:
+            print('Logged in!')
+            print(res.json())
+        else:
+            print('Error logging in!')
+            sys.exit()
+
+        # query players data
+        print('Querying player info...')
+        res = get_players_info(5)
+        if res.status_code == 200:
+            print(f"Number of players: {len(res.json()['data']['value']['playerList'])}")
+        else:
+            print(f'Status code: {res.status_code}')
+
+        # create a data frame
+        df_player_info = pd.json_normalize(res.json()['data']['value']['playerList'])
+        print(df_player_info.head(10))
+
+        #TODO: get current squad
+
+        #TODO: select best squad
+        select_matchday_squad(df_player_info, 5)
+
+        # logout of the session
+        res = session_logout()
+        if res.status_code == 200:
+            print('Logged out!')
+        else:
+            print('Error logging out!')
+            sys.exit()
+
+
+if __name__ == "__main__":
+    main()

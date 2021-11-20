@@ -5,7 +5,7 @@ Module that implements squad selection algorithm.
 """
 
 
-import sys
+import sys, argparse
 from io import TextIOWrapper
 import json
 import requests
@@ -307,8 +307,14 @@ def select_matchday_squad(df_player_info: pd.DataFrame, matchday: int,
 def main():
     """Main function"""
 
+    # parse arguments
+    parser = argparse.ArgumentParser(description='UEFA Champions League Fantasy Football bot.')
+    parser.add_argument('-md', metavar='Matchday', type=int, required=True, dest='matchday',
+                    help='matchday to find the best squad transfers')
+    args = parser.parse_args()
+
     # match day
-    matchday = 5
+    matchday = args.matchday
 
     # session
     sn = requests.session()
@@ -352,12 +358,18 @@ def main():
         next_squad_players = select_matchday_squad(df_player_info, matchday, current_squad)
 
         # compare squads
-        print(f"Squad value before transfers: \
+        print('\n\n')
+        print(f'Current squad: {curr_squad_players}')
+        print(f"Current Squad value: \
             {df_player_info.query('pDName == @curr_squad_players')['value'].sum()}")
+        print('\n')
         print(f'Transfer out: {set(curr_squad_players).difference(set(next_squad_players))}')
         print(f'Transfer in : {set(next_squad_players).difference(set(curr_squad_players))}')
-        print(f"Squad value after transfers : \
+        print('\n')
+        print(f'Next Squad: {next_squad_players}')
+        print(f"Next squad value: \
             {df_player_info.query('pDName == @next_squad_players')['value'].sum()}")
+        print('\n\n')
 
         # logout of the session
         res = session_logout(sn)

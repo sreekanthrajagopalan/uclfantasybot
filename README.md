@@ -30,5 +30,9 @@ Run `python squad_manager.py -md 5` to get the squad for the 5th matchday.
 # Develop
 You may use the `.devcontainer` in the repository to get started with the development.
 
+## TODOs
+### Known issues
+- Handle the scenario when a team does not exist
+
 # Disclaimer
 The project is intended to be academic in nature. The author(s) have neither monetarily benefited from third-parties nor have won any official fantasy football prize. The author(s) will duly disclose any such benefits upon receipt and forfeit them if required. The author(s) shall not be held liable for any misuse of the software or for any violation of the spirit of the fantasy football by others.

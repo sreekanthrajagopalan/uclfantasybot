@@ -285,6 +285,8 @@ def select_matchday_squad(df_player_info: pd.DataFrame, matchday: int,
     
     ## 4. overall objective
     def objOverall(m):
+        if matchday == 1:
+            return objMaxAvgPointsFormWeighted(m) + objMaxSquadValue(m)
         return objMaxTotalPoints(m)/(matchday-1) + objMaxAvgPointsFormWeighted(m) + objMaxSquadValue(m)
 
     # set objective 
@@ -347,10 +349,7 @@ def main():
 
         # get current squad
         #TODO: What if a team is not created yet?
-        if matchday > 1:
-            current_squad = get_current_squad(sn, guid, matchday)
-        else:
-            current_squad = {}
+        current_squad = get_current_squad(sn, guid, matchday)
         filter_list = [str(player['id']) for player in current_squad['playerid']]
         curr_squad_players = list(df_player_info.query('id == @filter_list')['pDName'])
 

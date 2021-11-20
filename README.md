@@ -31,8 +31,25 @@ Run `python squad_manager.py -md 5` to get the squad for the 5th matchday.
 You may use the `.devcontainer` in the repository to get started with the development.
 
 ## TODOs
+The following are some (not exhaustive) features and improvements planned for the current and the next seasons.
+
 ### Known issues
 - Handle the scenario when a team does not exist
+
+### Improvements
+- Use 'Selected by %' statistics for games with market speculation; this may be useful for first-time team selection when player data is not available and may be a signal of clubs expected to be elminated in the upcoming rounds
+- Use aggregated statistics by clubs to decide squad based on head-to-head records of clubs in upcoming games if public APIs for these are not straightforward to use
+- Consider implementing OOP with strategy patterns to deploy multiple bot strategies
+
+### Features
+- Matchday team selection - substitutions and captain
+- Update integer program to consider optimal wildcard and limitless plays
+- Automation
+    - Make transfers and substitutions automatically using Github Actions
+    - Consider Azure Function Apps/Logic Apps for Human Interaction to approve changes or play chips before deadlines if needed
+
+### Testing
+- Create bots and a league to test (requires automation to be completed)
 
 # Disclaimer
 The project is intended to be academic in nature. The author(s) have neither monetarily benefited from third-parties nor have won any official fantasy football prize. The author(s) will duly disclose any such benefits upon receipt and forfeit them if required. The author(s) shall not be held liable for any misuse of the software or for any violation of the spirit of the fantasy football by others.

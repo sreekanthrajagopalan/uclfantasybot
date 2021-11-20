@@ -8,10 +8,12 @@ Module that implements squad selection algorithm.
 import sys
 from io import TextIOWrapper
 import json
+from typing import Match
 import requests
 from requests.models import Response
 import pandas as pd
 import pyomo.environ as pyo
+from requests.sessions import session
 
 
 # API base URL
@@ -19,11 +21,11 @@ API_URL = r'https://gaming.uefa.com/en/uclfantasy'
 
 
 # function to log into a session
-def session_login(payload_file: TextIOWrapper) -> Response:
+def session_login(sn, payload_file: TextIOWrapper) -> Response:
     """POST request to login into a session"""
 
     url = r'/services/api/Session/login'
-    req = requests.post(API_URL + url,
+    req = sn.post(API_URL + url,
         headers={'accept': 'application/json', 'Content-Type': 'application/json'},
         data=json.dumps(json.load(payload_file)))
     print(f'Sent POST request to login: {req.url}')
@@ -31,11 +33,11 @@ def session_login(payload_file: TextIOWrapper) -> Response:
 
 
 # function to log out of a session
-def session_logout() -> Response:
+def session_logout(sn) -> Response:
     """POST request to logout of the session"""
 
     url = r'/services/api/Session/logout'
-    req = requests.post(API_URL + url,
+    req = sn.post(API_URL + url,
         headers={'Host': 'gaming.uefa.com',
             'Referer': 'https://gaming.uefa.com/en/uclfantasy/services/index.html'})
     print(f'Sent POST request to logout: {req.url}')
@@ -43,16 +45,47 @@ def session_logout() -> Response:
 
 
 # function to get players data/information
-def get_players_info(gameday_id: int) -> Response:
+def get_players_info(sn, gameday_id: int) -> Response:
     """GET request to UCL Fantasy API to get players information"""
 
     url = r'/services/api/Feed/players'
-    req = requests.get(API_URL + url,
+    req = sn.get(API_URL + url,
         params={'gamedayId': gameday_id, 'language': 'en'},
         headers={'Host': 'gaming.uefa.com',
             'Referer': 'https://gaming.uefa.com/en/uclfantasy/services/index.html'})
     print(f'Sent GET request for players data: {req.url}')
     return req
+
+
+# get current squad
+def get_current_squad(sn, guid: str, matchdayId: int):
+    """Get current squad"""
+
+    # return if guid is empty
+    if guid == "":
+        return []
+
+    # try getting current squad
+    url = f'/services/api/Gameplay/user/{guid}/team'
+    try:
+        req = sn.get(API_URL + url,
+            params={'matchdayId': matchdayId, 'phaseId': 1},
+            headers={'Host': 'gaming.uefa.com',
+                'Referer': 'https://gaming.uefa.com/en/uclfantasy/services/index.html'})
+        print(f'Sent GET request to get current team: {req.url}')
+
+        # process response
+        if req.status_code == 200:
+            print('Retrieved team details!')
+            print(req.json())
+            return req.json()['data']['value']['playerid']
+        
+        print('Error retrieving team!')
+        return []
+    
+    except:
+        print('Some error occurred!')
+        return []     
 
 
 # define basic sets of constraints
@@ -79,8 +112,6 @@ def define_basic_constraints(model, matchday: int, stage: str) -> None:
             for p in model.sPlayers) \
             <= m.pBudget[matchday]
     model.cBudget = pyo.Constraint(rule=rule_Budget)
-
-    #TODO: transfer rules
 
 
 # function to select the best squad for a given matchday
@@ -205,10 +236,12 @@ def select_matchday_squad(df_player_info: pd.DataFrame, matchday: int,
     for p in model.sInactivePlayers:
         model.ySelectPlayer[p].fix(0)
 
-    #TODO: constraint: exclude players not available for selection
-    # Why is 'trained' field '' between matchdays?
+    # constraint: exclude players not available for selection
+    #BUG: Why is 'trained' field '' between matchdays?
     #for p in model.sUnavailablePlayers:
     #    model.ySelectPlayer[p].fix(0)
+
+    #TODO: constraint: transfer limit
 
     # define objective
     form_weight = 0.5
@@ -235,20 +268,30 @@ def select_matchday_squad(df_player_info: pd.DataFrame, matchday: int,
 def main():
     """Main function"""
 
+    # match day
+    matchday = 6
+
+    # session
+    sn = requests.session()
+
+    # user GUID
+    guid = ""
+
     with open('login_payload.json', encoding='UTF8') as f_login_payload:
 
         # login to a session
-        res = session_login(f_login_payload)
+        res = session_login(sn, f_login_payload)
         if res.status_code == 200:
             print('Logged in!')
             print(res.json())
+            guid = res.json()['data']['value']['UCL_CLASSIC_RAW']['guid']
         else:
             print('Error logging in!')
             sys.exit()
 
         # query players data
         print('Querying player info...')
-        res = get_players_info(5)
+        res = get_players_info(sn, matchday-1)
         if res.status_code == 200:
             print(f"Number of players: {len(res.json()['data']['value']['playerList'])}")
         else:
@@ -258,14 +301,19 @@ def main():
         df_player_info = pd.json_normalize(res.json()['data']['value']['playerList'])
         print(df_player_info.head(10))
 
-        #TODO: get current squad
+        # get current squad
+        if matchday > 1:
+            current_squad = get_current_squad(sn, guid, matchday-1)
+        else:
+            current_squad = []
+        print(current_squad)
 
         #TODO: select best squad
-        opt_squad = select_matchday_squad(df_player_info, 5)
+        opt_squad = select_matchday_squad(df_player_info, matchday, current_squad)
         print(opt_squad)
 
         # logout of the session
-        res = session_logout()
+        res = session_logout(sn)
         if res.status_code == 200:
             print('Logged out!')
         else:

@@ -8,12 +8,10 @@ Module that implements squad selection algorithm.
 import sys
 from io import TextIOWrapper
 import json
-from typing import Match
 import requests
 from requests.models import Response
 import pandas as pd
 import pyomo.environ as pyo
-from requests.sessions import session
 
 
 # API base URL
@@ -63,13 +61,13 @@ def get_current_squad(sn, guid: str, matchdayId: int):
 
     # return if guid is empty
     if guid == "":
-        return []
+        return {}
 
     # try getting current squad
     url = f'/services/api/Gameplay/user/{guid}/team'
     try:
         req = sn.get(API_URL + url,
-            params={'matchdayId': matchdayId, 'phaseId': 1},
+            params={'matchdayId': matchdayId},
             headers={'Host': 'gaming.uefa.com',
                 'Referer': 'https://gaming.uefa.com/en/uclfantasy/services/index.html'})
         print(f'Sent GET request to get current team: {req.url}')
@@ -77,25 +75,25 @@ def get_current_squad(sn, guid: str, matchdayId: int):
         # process response
         if req.status_code == 200:
             print('Retrieved team details!')
-            print(req.json())
-            return req.json()['data']['value']['playerid']
+            return req.json()['data']['value']
         
         print('Error retrieving team!')
-        return []
+        return {}
     
-    except:
+    except requests.exceptions:
         print('Some error occurred!')
-        return []     
+        return {}
 
 
 # define basic sets of constraints
-def define_basic_constraints(model, matchday: int, stage: str) -> None:
+def define_basic_constraints(model, matchday: int, stage: str,
+    current_squad: dict = None) -> None:
     """Define basic sets of constraints in the MIP"""
 
     # required number of players by skills
     def rule_ReqdPlayersBySkills(m, skill):
         return sum(m.ySelectPlayer[p] for p in model.sPlayersWithSkills[skill]) \
-            <= m.pReqdPlayersBySkills[skill]
+            == m.pReqdPlayersBySkills[skill]
     model.cReqdPlayersBySkills = pyo.Constraint(model.sSkills,
         rule=rule_ReqdPlayersBySkills)
 
@@ -106,17 +104,32 @@ def define_basic_constraints(model, matchday: int, stage: str) -> None:
     model.cLimitPlayersPerClub = pyo.Constraint(model.sClubs,
         rule=rule_LimPlayersPerClub)
 
-    # cannot exceed budget
-    def rule_Budget(m):
-        return sum(m.pPlayerPrices[p] * m.ySelectPlayer[p] \
-            for p in model.sPlayers) \
-            <= m.pBudget[matchday]
-    model.cBudget = pyo.Constraint(rule=rule_Budget)
+    if current_squad == {}:
+        # cannot exceed budget
+        def rule_Budget(m):
+            return sum(m.pPlayerValues[p] * m.ySelectPlayer[p] \
+                for p in model.sPlayers) \
+                <= m.pBudget[matchday]
+        model.cBudget = pyo.Constraint(rule=rule_Budget)
+
+    else:
+        # balance should be non-negative
+        def rule_Balance(m):
+            return sum(m.pPlayerValues[p] for p in model.sCurrentPlayers) \
+                - sum(m.pPlayerValues[p] * m.ySelectPlayer[p] for p in model.sPlayers) \
+                + current_squad['teamBalance'] >= 0
+        model.cBalance = pyo.Constraint(rule=rule_Balance)
+
+    # transfer limit
+    def rule_LimFreeTransfers(m):
+        return sum(1 - m.ySelectPlayer[p] for p in model.sCurrentPlayers) \
+            <= m.pLimFreeTransfers[matchday]
+    model.cLimFreeTransfers = pyo.Constraint(rule=rule_LimFreeTransfers)
 
 
 # function to select the best squad for a given matchday
 def select_matchday_squad(df_player_info: pd.DataFrame, matchday: int,
-    current_squad: list = None) -> list:
+    current_squad: dict = None) -> list:
     """MIP to select the best squad for a given matchday"""
 
     # declare Pyomo model
@@ -124,7 +137,7 @@ def select_matchday_squad(df_player_info: pd.DataFrame, matchday: int,
 
     # set of players
     model.sPlayers = pyo.Set(initialize=list(df_player_info['id']),
-        doc='Set of players')
+        ordered=False, doc='Set of players')
 
     # subset of active players
     model.sActivePlayers = pyo.Set(
@@ -138,6 +151,13 @@ def select_matchday_squad(df_player_info: pd.DataFrame, matchday: int,
             'In contention to start next game')]['id']),
         doc='Set of players available for selection')
     model.sUnavailablePlayers = model.sPlayers - model.sAvailablePlayers
+
+    # current players in the squad
+    def sCurrentPlayers_init(m):
+        for player in current_squad['playerid']:
+            yield str(player['id'])
+    model.sCurrentPlayers = pyo.Set(initialize=sCurrentPlayers_init,
+        doc='Set of players currently in the squad')
 
     # set of player skills
     model.sSkills = pyo.Set(initialize=[1, 2, 3, 4], doc='Set of player skills')
@@ -201,11 +221,17 @@ def select_matchday_squad(df_player_info: pd.DataFrame, matchday: int,
     model.pBudget = pyo.Param(model.sMatchdays, initialize=pBudget_init,
         doc='Budget for the matchday')
 
-    # param: player prices
-    def pPlayerPrices_init(m, player):
+    # param: player value
+    def pPlayerValues_init(m, player):
         return df_player_info[df_player_info['id'] == player]['value'].iloc[0]
-    model.pPlayerPrices = pyo.Param(model.sPlayers, initialize=pPlayerPrices_init,
-        doc='Player prices')
+    model.pPlayerValues = pyo.Param(model.sPlayers, initialize=pPlayerValues_init,
+        doc='Player values')
+
+    # param: player total points
+    def pPlayerTotPoints_init(m, player):
+        return df_player_info[df_player_info['id'] == player]['totPts'].iloc[0]
+    model.pPlayerTotPoints = pyo.Param(model.sPlayers, initialize=pPlayerTotPoints_init,
+        doc='Player total points')
 
     # param: player average points
     def pPlayerAvgPoints_init(m, player):
@@ -230,7 +256,7 @@ def select_matchday_squad(df_player_info: pd.DataFrame, matchday: int,
     stage = find_key(matchdays_in_stages, matchday)
 
     # define basic sets of constraints
-    define_basic_constraints(model, matchday, stage)
+    define_basic_constraints(model, matchday, stage, current_squad)
 
     # constraint: exclude inactive players
     for p in model.sInactivePlayers:
@@ -241,15 +267,28 @@ def select_matchday_squad(df_player_info: pd.DataFrame, matchday: int,
     #for p in model.sUnavailablePlayers:
     #    model.ySelectPlayer[p].fix(0)
 
-    #TODO: constraint: transfer limit
+    # define objectives
+    ## 1. squad value
+    def objMaxSquadValue(m):
+        return sum(m.pPlayerValues[p] * m.ySelectPlayer[p] \
+            for p in model.sPlayers)
 
-    # define objective
-    form_weight = 0.5
+    ## 2. total points
+    def objMaxTotalPoints(m):
+        return sum(m.pPlayerTotPoints[p] * m.ySelectPlayer[p] for p in model.sPlayers)
+
+    ## 3. weighted average points and last matchday points (form)
+    form_weight = 0.3
     def objMaxAvgPointsFormWeighted(m):
         return sum(((1-form_weight) * m.pPlayerAvgPoints[p] + form_weight * m.pPlayerLastGdPoints[p])\
             * m.ySelectPlayer[p] for p in model.sPlayers)
-    model.objMaxAvgPointsFormWeighted = pyo.Objective(rule=objMaxAvgPointsFormWeighted,
-        sense=pyo.maximize)
+    
+    ## 4. overall objective
+    def objOverall(m):
+        return objMaxTotalPoints(m)/(matchday-1) + objMaxAvgPointsFormWeighted(m) + objMaxSquadValue(m)
+
+    # set objective 
+    model.obj = pyo.Objective(rule=objOverall, sense=pyo.maximize)
 
     # solve MIP to get best squad
     opt = pyo.SolverFactory('cbc')
@@ -269,7 +308,7 @@ def main():
     """Main function"""
 
     # match day
-    matchday = 6
+    matchday = 5
 
     # session
     sn = requests.session()
@@ -283,7 +322,6 @@ def main():
         res = session_login(sn, f_login_payload)
         if res.status_code == 200:
             print('Logged in!')
-            print(res.json())
             guid = res.json()['data']['value']['UCL_CLASSIC_RAW']['guid']
         else:
             print('Error logging in!')
@@ -291,7 +329,7 @@ def main():
 
         # query players data
         print('Querying player info...')
-        res = get_players_info(sn, matchday-1)
+        res = get_players_info(sn, matchday)
         if res.status_code == 200:
             print(f"Number of players: {len(res.json()['data']['value']['playerList'])}")
         else:
@@ -302,15 +340,24 @@ def main():
         print(df_player_info.head(10))
 
         # get current squad
+        #TODO: What if a team is not created yet?
         if matchday > 1:
-            current_squad = get_current_squad(sn, guid, matchday-1)
+            current_squad = get_current_squad(sn, guid, matchday)
         else:
-            current_squad = []
-        print(current_squad)
+            current_squad = {}
+        filter_list = [str(player['id']) for player in current_squad['playerid']]
+        curr_squad_players = list(df_player_info.query('id == @filter_list')['pDName'])
 
-        #TODO: select best squad
-        opt_squad = select_matchday_squad(df_player_info, matchday, current_squad)
-        print(opt_squad)
+        # select best squad
+        next_squad_players = select_matchday_squad(df_player_info, matchday, current_squad)
+
+        # compare squads
+        print(f"Squad value before transfers: \
+            {df_player_info.query('pDName == @curr_squad_players')['value'].sum()}")
+        print(f'Transfer out: {set(curr_squad_players).difference(set(next_squad_players))}')
+        print(f'Transfer in : {set(next_squad_players).difference(set(curr_squad_players))}')
+        print(f"Squad value after transfers : \
+            {df_player_info.query('pDName == @next_squad_players')['value'].sum()}")
 
         # logout of the session
         res = session_logout(sn)

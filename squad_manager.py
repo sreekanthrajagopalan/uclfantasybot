@@ -12,6 +12,7 @@ import requests
 from requests.models import Response
 import pandas as pd
 import pyomo.environ as pyo
+from pyomo.opt import SolverStatus, TerminationCondition
 
 
 # API base URL
@@ -120,10 +121,15 @@ def define_basic_constraints(model, matchday: int, stage: str,
                 + current_squad['teamBalance'] >= 0
         model.cBalance = pyo.Constraint(rule=rule_Balance)
 
+    # number of extra transfers
+    def rule_NumExtraTransfers(m):
+        return sum(1 - m.ySelectPlayer[p] for p in model.sCurrentPlayers) \
+            - m.pLimFreeTransfers[matchday] <= m.zNumExtraTransfers
+    model.cNumExtraTransfers = pyo.Constraint(rule=rule_NumExtraTransfers)
+
     # transfer limit
     def rule_LimFreeTransfers(m):
-        return sum(1 - m.ySelectPlayer[p] for p in model.sCurrentPlayers) \
-            <= m.pLimFreeTransfers[matchday]
+        return m.zNumExtraTransfers <= 0
     model.cLimFreeTransfers = pyo.Constraint(rule=rule_LimFreeTransfers)
 
 
@@ -248,6 +254,10 @@ def select_matchday_squad(df_player_info: pd.DataFrame, matchday: int,
     # var: binary indicating if a player is selected for matchday squad
     model.ySelectPlayer = pyo.Var(model.sPlayers, domain=pyo.Binary)
 
+    # var: number of extra transfers made for the matchday
+    model.zNumExtraTransfers = pyo.Var(domain=pyo.Integers, bounds=(0, 15),
+        initialize=0)
+
     # utils
     def find_key(d, v):
         for k, vs in d.items():
@@ -264,37 +274,59 @@ def select_matchday_squad(df_player_info: pd.DataFrame, matchday: int,
 
     # constraint: exclude players not available for selection
     #BUG: Why is 'trained' field '' between matchdays?
-    #for p in model.sUnavailablePlayers:
-    #    model.ySelectPlayer[p].fix(0)
+    for p in model.sUnavailablePlayers:
+        model.ySelectPlayer[p].fix(0)
 
     # define objectives
     ## 1. squad value
     def objMaxSquadValue(m):
         return sum(m.pPlayerValues[p] * m.ySelectPlayer[p] \
-            for p in model.sPlayers)
+            for p in (model.sActivePlayers - model.sUnavailablePlayers))
 
     ## 2. total points
     def objMaxTotalPoints(m):
-        return sum(m.pPlayerTotPoints[p] * m.ySelectPlayer[p] for p in model.sPlayers)
+        return sum(m.pPlayerTotPoints[p] * m.ySelectPlayer[p] 
+            for p in (model.sActivePlayers - model.sUnavailablePlayers))
 
     ## 3. weighted average points and last matchday points (form)
     form_weight = 0.3
     def objMaxAvgPointsFormWeighted(m):
         return sum(((1-form_weight) * m.pPlayerAvgPoints[p] + form_weight * m.pPlayerLastGdPoints[p])\
-            * m.ySelectPlayer[p] for p in model.sPlayers)
+            * m.ySelectPlayer[p] for p in (model.sActivePlayers - model.sUnavailablePlayers))
     
     ## 4. overall objective
     def objOverall(m):
         if matchday == 1:
             return objMaxAvgPointsFormWeighted(m) + objMaxSquadValue(m)
-        return objMaxTotalPoints(m)/(matchday-1) + objMaxAvgPointsFormWeighted(m) + objMaxSquadValue(m)
+        return objMaxTotalPoints(m)/(matchday-1) + objMaxAvgPointsFormWeighted(m) + objMaxSquadValue(m) \
+            - 20 * m.zNumExtraTransfers
 
     # set objective 
     model.obj = pyo.Objective(rule=objOverall, sense=pyo.maximize)
 
     # solve MIP to get best squad
     opt = pyo.SolverFactory('cbc')
-    opt.solve(model, tee=True)
+    results = opt.solve(model, tee=True)
+
+    # if MIP is infeasible, drop unavailability constraint and free transfer limit
+    #TODO: consider playing the wildcard if available?
+    if results.solver.termination_condition == TerminationCondition.infeasible:
+        for p in model.sUnavailablePlayers:
+            if p in model.sCurrentPlayers:
+                model.ySelectPlayer[p].unfix()
+        model.cLimFreeTransfers.deactivate()
+
+        # solve MIP to get best squad
+        opt = pyo.SolverFactory('cbc')
+        opt.solve(model, tee=True)
+
+    # stats
+    print(f'Number of extra transfers: {pyo.value(model.zNumExtraTransfers)}')
+    numInactivePlayersInSquad = 0
+    for p in model.sUnavailablePlayers:
+        if pyo.value(model.ySelectPlayer[p]) >= 0.9999:
+            numInactivePlayersInSquad += 1
+    print(f'Number of inactive players: {numInactivePlayersInSquad}')
 
     # return best squad
     opt_squad = []

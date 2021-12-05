@@ -86,6 +86,14 @@ def get_current_squad(sn, guid: str, matchdayId: int):
         return {}
 
 
+# predict points
+def predict_points(sn, df_player_info: pd.DataFrame):
+    """Predict points for each player"""
+    
+    #TODO: how to get player points & stats for all matchdays?
+    pass
+
+
 # define basic sets of constraints
 def define_basic_constraints(model, matchday: int, stage: str,
     current_squad: dict = None) -> None:
@@ -417,6 +425,9 @@ def main():
         # create a data frame
         df_player_info = pd.json_normalize(res.json()['data']['value']['playerList'])
         print(df_player_info.head(10))
+
+        # predict points for players
+        predict_points(sn, df_player_info)
 
         # get current squad
         #TODO: What if a team is not created yet?

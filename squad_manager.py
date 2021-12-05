@@ -107,6 +107,8 @@ def define_basic_constraints(model, matchday: int, stage: str,
 
     if current_squad == {}:
         # cannot exceed budget
+        #NOTE: can be removed once tested as balance constraint is equivalent when
+        # model.sCurrentPlayers = {}
         def rule_Budget(m):
             return sum(m.pPlayerValues[p] * m.ySelectPlayer[p] \
                 for p in model.sPlayers) \
@@ -135,7 +137,7 @@ def define_basic_constraints(model, matchday: int, stage: str,
 
 # function to select the best squad for a given matchday
 def select_matchday_squad(df_player_info: pd.DataFrame, matchday: int,
-    current_squad: dict = None) -> list:
+    current_squad: dict = None, user_opt: dict = None) -> list:
     """MIP to select the best squad for a given matchday"""
 
     # declare Pyomo model
@@ -277,6 +279,31 @@ def select_matchday_squad(df_player_info: pd.DataFrame, matchday: int,
     for p in model.sUnavailablePlayers:
         model.ySelectPlayer[p].fix(0)
 
+    # constraint: average % selected should be exceed a given value
+    avg_percent_sel = 10
+    def rule_AvgPercentSelected(m):
+        return sum(df_player_info[df_player_info['id'] == p]['selPer'].iloc[0] \
+            * model.ySelectPlayer[p] for p in m.sActivePlayers) >= avg_percent_sel \
+            * sum(m.pReqdPlayersBySkills[s] for s in m.sSkills) 
+    model.cAvgPercentSelected = pyo.Constraint(rule=rule_AvgPercentSelected)
+
+    # constraint: minimum % selected should be exceed a given value
+    min_percent_sel = 1
+    def rule_MinPercentSelected(m, player):
+        return df_player_info[df_player_info['id'] == player]['selPer'].iloc[0] \
+            * m.ySelectPlayer[player] >= min_percent_sel * m.ySelectPlayer[player]
+    model.cMinPercentSelected = pyo.Constraint(model.sActivePlayers,
+        rule=rule_MinPercentSelected)
+
+    # fix specific players
+    if user_opt is not None:
+        for p in user_opt['includePlayers']:
+            if str(p) in model.sPlayers:
+                model.ySelectPlayer[str(p)].fix(1)
+        for p in user_opt['excludePlayers']:
+            if str(p) in model.sPlayers:
+                model.ySelectPlayer[str(p)].fix(0)
+
     # define objectives
     ## 1. squad value
     def objMaxSquadValue(m):
@@ -295,11 +322,12 @@ def select_matchday_squad(df_player_info: pd.DataFrame, matchday: int,
             * m.ySelectPlayer[p] for p in (model.sActivePlayers - model.sUnavailablePlayers))
     
     ## 4. overall objective
+    extra_trans_pen = 20
     def objOverall(m):
         if matchday == 1:
             return objMaxAvgPointsFormWeighted(m) + objMaxSquadValue(m)
         return objMaxTotalPoints(m)/(matchday-1) + objMaxAvgPointsFormWeighted(m) + objMaxSquadValue(m) \
-            - 20 * m.zNumExtraTransfers
+            - extra_trans_pen * m.zNumExtraTransfers
 
     # set objective 
     model.obj = pyo.Objective(rule=objOverall, sense=pyo.maximize)
@@ -345,10 +373,21 @@ def main():
     parser = argparse.ArgumentParser(description='UEFA Champions League Fantasy Football bot.')
     parser.add_argument('-md', metavar='Matchday', type=int, required=True, dest='matchday',
                     help='matchday to find the best squad transfers')
+    parser.add_argument('-inc', metavar='Include Player(s)', nargs="*", type=int, default=[], dest='include_players',
+                    help='must-include players')
+    parser.add_argument('-exc', metavar='Exclude Player(s)', nargs='*', type=int, default=[], dest='exclude_players',
+                    help='must-exclude players')
     args = parser.parse_args()
 
     # match day
     matchday = args.matchday
+
+    # must select or avoid players
+    include_players = args.include_players
+    exclude_players = args.exclude_players
+
+    # make user options dict
+    user_opt = {'includePlayers': include_players, 'excludePlayers': exclude_players}
 
     # session
     sn = requests.session()
@@ -386,7 +425,7 @@ def main():
         curr_squad_players = list(df_player_info.query('id == @filter_list')['pDName'])
 
         # select best squad
-        next_squad_players = select_matchday_squad(df_player_info, matchday, current_squad)
+        next_squad_players = select_matchday_squad(df_player_info, matchday, current_squad, user_opt)
 
         # compare squads
         print('\n\n')

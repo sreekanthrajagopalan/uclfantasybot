@@ -1,0 +1,6 @@
+highspy
+numpy
+pandas
+pybind11
+pyomo
+requests

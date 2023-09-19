@@ -1,15 +1,14 @@
 {
-  "optType": 0,
-  "platformId": 0,
-  "userId": 0,
-  "socialId": "string",
-  "gigyaId": "string",
-  "fullName": "string",
-  "countryCode": "string",
-  "favTeamCode": "string",
-  "profilePic": "string",
-  "level": "string",
-  "levelName": "string",
-  "favTeamId": 0,
-  "accessToken": "string"
+  "optType": 1,
+  "platformId": 1,
+  "userId": <int>,
+  "socialId": <int>,
+  "gigyaId": "<int>",
+  "fullName": "<string>",
+  "countryCode": "<string>",
+  "favTeamId": null,
+  "accessToken": "<string>",
+  "profilePic": "https://gaming.uefa.com/assets/avatars/cap-white_{size}{ratio}.png",
+  "level": "5",
+  "levelName": "Apprentice"
 }

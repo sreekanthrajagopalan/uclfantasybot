@@ -102,7 +102,12 @@ def get_current_squad(sn, guid: str, matchdayId: int):
 
 # define basic sets of constraints
 def define_basic_constraints(
-    model, matchday: int, stage: str, current_squad: dict = None
+    model,
+    matchday: int,
+    stage: str,
+    current_squad: dict = None,
+    use_wildcard: bool = False,
+    use_limitless: bool = False,
 ) -> None:
     """Define basic sets of constraints in the MIP"""
 
@@ -132,7 +137,8 @@ def define_basic_constraints(
                 <= m.pBudget[matchday]
             )
 
-        model.cBudget = pyo.Constraint(rule=rule_Budget)
+        if not use_wildcard:
+            model.cBudget = pyo.Constraint(rule=rule_Budget)
 
     else:
         # balance should be non-negative
@@ -144,7 +150,8 @@ def define_basic_constraints(
                 >= 0
             )
 
-        model.cBalance = pyo.Constraint(rule=rule_Balance)
+        if not use_wildcard:
+            model.cBalance = pyo.Constraint(rule=rule_Balance)
 
     # transfer limit
     def rule_LimFreeTransfers(m):
@@ -153,12 +160,17 @@ def define_basic_constraints(
             <= m.pLimFreeTransfers[matchday]
         )
 
-    model.cLimFreeTransfers = pyo.Constraint(rule=rule_LimFreeTransfers)
+    if not use_limitless:
+        model.cLimFreeTransfers = pyo.Constraint(rule=rule_LimFreeTransfers)
 
 
 # function to select the best squad for a given matchday
 def select_matchday_squad(
-    df_player_info: pd.DataFrame, matchday: int, current_squad: dict = None
+    df_player_info: pd.DataFrame,
+    matchday: int,
+    current_squad: dict = None,
+    use_wildcard: bool = False,
+    use_limitless: bool = False,
 ) -> list:
     """MIP to select the best squad for a given matchday"""
 
@@ -351,7 +363,7 @@ def select_matchday_squad(
     stage = find_key(matchdays_in_stages, matchday)
 
     # define basic sets of constraints
-    define_basic_constraints(model, matchday, stage, current_squad)
+    define_basic_constraints(model, matchday, stage, current_squad, use_wildcard, use_limitless)
 
     # constraint: exclude inactive players
     for p in model.sInactivePlayers:
@@ -414,17 +426,34 @@ def main():
     # parse arguments
     parser = argparse.ArgumentParser(description="UEFA Champions League Fantasy Football bot.")
     parser.add_argument(
-        "-md",
-        metavar="Matchday",
+        "--md",
         type=int,
         required=True,
         dest="matchday",
-        help="matchday to find the best squad transfers",
+        help="Matchday to find the best squad transfers",
+    )
+    parser.add_argument(
+        "--use-wildcard",
+        type=bool,
+        dest="wildcard",
+        default=False,
+        help="Whether to use wildcard for the matchday",
+    )
+    parser.add_argument(
+        "--use-limitless",
+        type=bool,
+        dest="limitless",
+        default=False,
+        help="Whether to use limitless for the matchday",
     )
     args = parser.parse_args()
 
     # match day
     matchday = args.matchday
+    use_wildcard = args.wildcard
+    use_limitless = args.limitless
+    if use_limitless:
+        use_wildcard = True
 
     # session
     sn = requests.session()
@@ -461,7 +490,9 @@ def main():
         curr_squad_players = list(df_player_info.query("id == @filter_list")["pDName"])
 
         # select best squad
-        next_squad_players = select_matchday_squad(df_player_info, matchday, current_squad)
+        next_squad_players = select_matchday_squad(
+            df_player_info, matchday, current_squad, use_wildcard, use_limitless
+        )
 
         # compare squads
         print("\n\n")

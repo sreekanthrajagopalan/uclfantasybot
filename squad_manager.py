@@ -106,6 +106,7 @@ def define_basic_constraints(
     matchday: int,
     stage: str,
     current_squad: dict = None,
+    add_transfers: int = 0,
     use_wildcard: bool = False,
     use_limitless: bool = False,
 ) -> None:
@@ -118,7 +119,9 @@ def define_basic_constraints(
             == m.pReqdPlayersBySkills[skill]
         )
 
-    model.cReqdPlayersBySkills = pyo.Constraint(model.sSkills, rule=rule_ReqdPlayersBySkills)
+    model.cReqdPlayersBySkills = pyo.Constraint(
+        model.sSkills, rule=rule_ReqdPlayersBySkills
+    )
 
     # player limit per club
     def rule_LimPlayersPerClub(m, club):
@@ -127,7 +130,9 @@ def define_basic_constraints(
             <= m.pLimPlayersPerClub[stage]
         )
 
-    model.cLimitPlayersPerClub = pyo.Constraint(model.sClubs, rule=rule_LimPlayersPerClub)
+    model.cLimitPlayersPerClub = pyo.Constraint(
+        model.sClubs, rule=rule_LimPlayersPerClub
+    )
 
     if current_squad == {}:
         # cannot exceed budget
@@ -157,7 +162,7 @@ def define_basic_constraints(
     def rule_LimFreeTransfers(m):
         return (
             sum(1 - m.ySelectPlayer[p] for p in model.sCurrentPlayers)
-            <= m.pLimFreeTransfers[matchday]
+            <= m.pLimFreeTransfers[matchday] + add_transfers
         )
 
     if not use_limitless:
@@ -169,6 +174,7 @@ def select_matchday_squad(
     df_player_info: pd.DataFrame,
     matchday: int,
     current_squad: dict = None,
+    add_transfers: int = 0,
     use_wildcard: bool = False,
     use_limitless: bool = False,
 ) -> list:
@@ -234,7 +240,9 @@ def select_matchday_squad(
             yield player
 
     model.sPlayersInClubs = pyo.Set(
-        model.sClubs, initialize=sPlayersInClubs_init, doc="Set of players in a given club"
+        model.sClubs,
+        initialize=sPlayersInClubs_init,
+        doc="Set of players in a given club",
     )
 
     # set of matchdays
@@ -245,7 +253,13 @@ def select_matchday_squad(
 
     # set of stages
     model.sStages = pyo.Set(
-        initialize=["Group stage", "Round of 16", "Quarter-finals", "Semi-finals", "Final"],
+        initialize=[
+            "Group stage",
+            "Round of 16",
+            "Quarter-finals",
+            "Semi-finals",
+            "Final",
+        ],
         doc="Set of stages",
     )
 
@@ -348,7 +362,9 @@ def select_matchday_squad(
         return df_player_info[df_player_info["id"] == player]["lastGdPoints"].iloc[0]
 
     model.pPlayerLastGdPoints = pyo.Param(
-        model.sPlayers, initialize=pPlayerLastGdPoints_init, doc="Player last game day points"
+        model.sPlayers,
+        initialize=pPlayerLastGdPoints_init,
+        doc="Player last game day points",
     )
 
     # var: binary indicating if a player is selected for matchday squad
@@ -363,7 +379,15 @@ def select_matchday_squad(
     stage = find_key(matchdays_in_stages, matchday)
 
     # define basic sets of constraints
-    define_basic_constraints(model, matchday, stage, current_squad, use_wildcard, use_limitless)
+    define_basic_constraints(
+        model,
+        matchday,
+        stage,
+        current_squad,
+        add_transfers,
+        use_wildcard,
+        use_limitless,
+    )
 
     # constraint: exclude inactive players
     for p in model.sInactivePlayers:
@@ -388,7 +412,10 @@ def select_matchday_squad(
 
     def objMaxAvgPointsFormWeighted(m):
         return sum(
-            ((1 - form_weight) * m.pPlayerAvgPoints[p] + form_weight * m.pPlayerLastGdPoints[p])
+            (
+                (1 - form_weight) * m.pPlayerAvgPoints[p]
+                + form_weight * m.pPlayerLastGdPoints[p]
+            )
             * m.ySelectPlayer[p]
             for p in model.sPlayers
         )
@@ -398,9 +425,10 @@ def select_matchday_squad(
         if matchday == 1:
             return objMaxAvgPointsFormWeighted(m) + objMaxSquadValue(m)
         return (
-            objMaxTotalPoints(m) / (matchday - 1)
-            + objMaxAvgPointsFormWeighted(m)
-            + objMaxSquadValue(m)
+            objMaxTotalPoints(m) * 0.33
+            + objMaxAvgPointsFormWeighted(m) * 0.33
+            + objMaxSquadValue(m) * 0.33
+            - 4 * add_transfers
         )
 
     # set objective
@@ -414,7 +442,9 @@ def select_matchday_squad(
     opt_squad = []
     for p in model.sPlayers:
         if pyo.value(model.ySelectPlayer[p]) >= 0.9999:
-            opt_squad.append(df_player_info[df_player_info["id"] == p]["pDName"].iloc[0])
+            opt_squad.append(
+                df_player_info[df_player_info["id"] == p]["pDName"].iloc[0]
+            )
 
     return opt_squad
 
@@ -424,13 +454,22 @@ def main():
     """Main function"""
 
     # parse arguments
-    parser = argparse.ArgumentParser(description="UEFA Champions League Fantasy Football bot.")
+    parser = argparse.ArgumentParser(
+        description="UEFA Champions League Fantasy Football bot."
+    )
     parser.add_argument(
         "--md",
         type=int,
         required=True,
         dest="matchday",
         help="Matchday to find the best squad transfers",
+    )
+    parser.add_argument(
+        "--add-transfers",
+        type=int,
+        default=0,
+        dest="add_transfers",
+        help="Additional transfers for the matchday",
     )
     parser.add_argument(
         "--use-wildcard",
@@ -450,6 +489,7 @@ def main():
 
     # match day
     matchday = args.matchday
+    add_transfers = args.add_transfers
     use_wildcard = args.wildcard
     use_limitless = args.limitless
     if use_limitless:
@@ -475,7 +515,9 @@ def main():
         print("Querying player info...")
         res = get_players_info(sn, matchday)
         if res.status_code == 200:
-            print(f"Number of players: {len(res.json()['data']['value']['playerList'])}")
+            print(
+                f"Number of players: {len(res.json()['data']['value']['playerList'])}"
+            )
         else:
             print(f"Status code: {res.status_code}")
 
@@ -491,7 +533,12 @@ def main():
 
         # select best squad
         next_squad_players = select_matchday_squad(
-            df_player_info, matchday, current_squad, use_wildcard, use_limitless
+            df_player_info,
+            matchday,
+            current_squad,
+            add_transfers,
+            use_wildcard,
+            use_limitless,
         )
 
         # compare squads
@@ -502,8 +549,12 @@ def main():
             {df_player_info.query('pDName == @curr_squad_players')['value'].sum()}"
         )
         print("\n")
-        print(f"Transfer out: {set(curr_squad_players).difference(set(next_squad_players))}")
-        print(f"Transfer in : {set(next_squad_players).difference(set(curr_squad_players))}")
+        print(
+            f"Transfer out: {set(curr_squad_players).difference(set(next_squad_players))}"
+        )
+        print(
+            f"Transfer in : {set(next_squad_players).difference(set(curr_squad_players))}"
+        )
         print("\n")
         print(f"Next Squad: {next_squad_players}")
         print(
